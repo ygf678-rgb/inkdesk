@@ -1,0 +1,4 @@
+pillow
+requests
+paho-mqtt
+lunar-python

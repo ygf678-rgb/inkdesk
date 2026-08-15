@@ -1,0 +1,4 @@
+__pycache__/
+*.bmp
+*.png
+weather_cache.json
