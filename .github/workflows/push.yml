@@ -1,0 +1,55 @@
+name: inkdesk push
+
+on:
+  schedule:
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: inkdesk
+  cancel-in-progress: false
+
+env:
+  FONT_URL: https://github.com/lxgw/LxgwWenkaiGB-Lite/releases/download/v1.522/LXGWWenKaiGBLite-Regular.ttf
+
+jobs:
+  render-and-push:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      - name: Cache font
+        id: font-cache
+        uses: actions/cache@v4
+        with:
+          path: fonts
+          key: font-lxgw-wenkai-gb-lite-v1.522
+
+      - name: Download font
+        if: steps.font-cache.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p fonts
+          curl -fsSL --retry 3 -o fonts/cjk.ttf "$FONT_URL"
+          ls -lh fonts/
+
+      - name: Render and push
+        env:
+          DEVICE_ID: ${{ secrets.DEVICE_ID }}
+        run: python inkdesk_cloud.py --push
+
+      - name: Upload preview
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: inkdesk-preview
+          path: inkdesk.png
+          retention-days: 3
+          if-no-files-found: ignore
