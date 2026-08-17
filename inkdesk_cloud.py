@@ -323,7 +323,7 @@ def render():
     except Exception: tp = None
     if tp and (tp["counts"]["A"] or tp["counts"]["B"]):
         d.text((24, y), "今日选题" if tp["tops"] else "近期新研究", font=F(21), fill=0)
-        head = f"近{PM_DAYS}天 {tp['counts']['A'] + tp['counts']['B']} 篇新文献"
+        head = f"A 近30天 {tp['counts']['A']} · B 近60天 {tp['counts']['B']}"
         d.text((W - 24 - d.textlength(head, font=F(15)), y + 6), head, font=F(15), fill=0)
         y += 30
         FOOT_TOP = H - 56
