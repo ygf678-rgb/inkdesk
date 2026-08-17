@@ -40,9 +40,20 @@ jobs:
           curl -fsSL --retry 3 -o fonts/cjk.ttf "$FONT_URL"
           ls -lh fonts/
 
+      - name: Topic cache key
+        id: tk
+        run: echo "day=$(TZ=Asia/Shanghai date +%Y%m%d)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache topics
+        uses: actions/cache@v4
+        with:
+          path: topics.json
+          key: topics-${{ steps.tk.outputs.day }}
+
       - name: Render and push
         env:
           DEVICE_ID: ${{ secrets.DEVICE_ID }}
+          QWEN_KEY: ${{ secrets.QWEN_KEY }}
         run: python inkdesk_cloud.py --push
 
       - name: Upload preview
