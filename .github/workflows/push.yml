@@ -16,6 +16,8 @@ jobs:
   render-and-push:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v7
 
@@ -40,21 +42,24 @@ jobs:
           curl -fsSL --retry 3 -o fonts/cjk.ttf "$FONT_URL"
           ls -lh fonts/
 
-      - name: Topic cache key
-        id: tk
-        run: echo "day=$(TZ=Asia/Shanghai date +%Y%m%d)" >> "$GITHUB_OUTPUT"
-
-      - name: Cache topics
-        uses: actions/cache@v6
-        with:
-          path: topics.json
-          key: topics-${{ steps.tk.outputs.day }}
-
       - name: Render and push
         env:
           DEVICE_ID: ${{ secrets.DEVICE_ID }}
           QWEN_KEY: ${{ secrets.QWEN_KEY }}
         run: python inkdesk_cloud.py --push
+
+      - name: Commit topics.json
+        continue-on-error: true
+        run: |
+          if [ -n "$(git status --porcelain topics.json)" ]; then
+            git config user.name  "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add topics.json
+            git commit -m "topics: $(TZ=Asia/Shanghai date +%Y-%m-%d)"
+            git push || (git pull --rebase && git push)
+          else
+            echo "topics.json unchanged, nothing to commit"
+          fi
 
       - name: Upload preview
         if: always()
