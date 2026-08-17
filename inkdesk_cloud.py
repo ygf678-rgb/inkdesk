@@ -24,12 +24,32 @@ WC = {113:"晴",116:"多云",119:"阴",122:"阴天",143:"薄雾",176:"局部小�
  320:"中雪夹雨",323:"局部小雪",326:"小雪",329:"局部中雪",332:"中雪",335:"局部大雪",338:"大雪",
  350:"冰粒",353:"小阵雨",356:"中阵雨",359:"暴雨",362:"小阵雨夹雪",365:"中阵雨夹雪",368:"小阵雪",
  371:"中到大阵雪",374:"小冰粒",377:"中到大冰粒",386:"局部雷阵雨",389:"强雷阵雨",
- 392:"局部雷阵雪",395:"中到大雷阵雪"}
+ 392:"局部雷阵雪",395:"中到大雷阵雪",
+ 149:"霾"}   # 149 是 wttr.in 自己加的码，不在 WWO 标准表里
+
+# 码表没命中时按英文关键词兜底，别让英文原文漏上屏
+DESC_KW = [("haze","霾"),("smok","烟霾"),("dust","浮尘"),("sand","沙尘"),
+           ("thunder","雷雨"),("drizzle","毛毛雨"),("shower","阵雨"),("sleet","雨夹雪"),
+           ("freez","冻雨"),("blizzard","暴风雪"),("snow","雪"),("rain","雨"),
+           ("fog","雾"),("mist","薄雾"),("overcast","阴"),("cloud","多云"),
+           ("clear","晴"),("sunny","晴")]
+
+def zh_desc(code, en):
+    """weatherCode → 中文；没命中就按英文关键词猜；再不行才回落英文"""
+    try:
+        z = WC.get(int(code))
+        if z: return z
+    except Exception:
+        pass
+    low = (en or "").lower()
+    for k, z in DESC_KW:
+        if k in low: return z
+    return en or "—"
 
 NEWS_API = "https://newsnow.busiyi.world/api/s"
 NEWS_UA  = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
             "(KHTML, like Gecko) Chrome/120.0 Safari/537.36")
-NEWS_SRC = [("thepaper", "澎湃新闻", 4), ("baidu", "百度热搜", 4), ("toutiao", "今日头条", 4)]
+NEWS_SRC = [("thepaper", "澎湃新闻", 2), ("baidu", "百度热搜", 2), ("toutiao", "今日头条", 2)]
 
 # ── 今日选题：自己查 PubMed（Kindle 那套的云端轻量版）──────────────
 # 有 QWEN_KEY 就 AI 预筛 + 中文化；没有就只报条数，绝不把英文长标题塞上屏
@@ -65,8 +85,9 @@ def _fetch_weather():
         d = requests.get(f"https://wttr.in/{CITY}?format=j1", timeout=25).json()
         c = d["current_condition"][0]
         def desc(o):
-            try:    return WC.get(int(o.get("weatherCode", 0)), o["weatherDesc"][0]["value"].strip())
-            except: return o["weatherDesc"][0]["value"].strip()
+            try:    en = o["weatherDesc"][0]["value"].strip()
+            except: en = ""
+            return zh_desc(o.get("weatherCode", 0), en)
         days = []
         for w in d["weather"][:3]:
             noon = w["hourly"][4] if len(w["hourly"]) > 4 else w["hourly"][0]
@@ -121,6 +142,9 @@ def _ai_pick(cands):
         headers={"Authorization": f"Bearer {QWEN_KEY}", "Content-Type": "application/json"},
         json={"model": AI_MODEL, "max_tokens": 400, "enable_thinking": False,
               "messages": [{"role": "user", "content": prompt}]})
+    if r.status_code != 200:                      # 日志里能看到原因，不会带出 key
+        print(f"[topics] AI HTTP {r.status_code}: {r.text[:200]}")
+        return []
     txt = r.json()["choices"][0]["message"]["content"]
     out = []
     for ln in txt.splitlines():
@@ -134,7 +158,9 @@ def get_topics():
     today = now_local().strftime("%Y%m%d")
     try:
         c = json.load(open(TOPIC_CACHE, encoding="utf8"))
-        if c.get("date") == today:
+        # 🔴 缓存里没有 tops 而现在又有 key，说明上次是没 key 时算的 —— 必须重算。
+        #    否则当天第一次跑碰上缺 key，一整天都会返回那份空结果
+        if c.get("date") == today and (c.get("tops") or not QWEN_KEY):
             return c
     except Exception:
         pass
@@ -155,6 +181,7 @@ def get_topics():
         time.sleep(0.4)                      # NCBI 限 3 次/秒
 
     tops = []
+    print(f"[topics] QWEN_KEY={'已配置' if QWEN_KEY else '缺失'} 候选={len(cands)} 命中={counts}")
     if QWEN_KEY and cands:
         try:
             ids = ",".join(c[2] for c in cands)
@@ -169,7 +196,9 @@ def get_topics():
                 ab = _re.sub(r"<[^>]+>", "", ab).strip()
                 if t: pool.append((acct, t, ab))
             if pool: tops = _ai_pick(pool)
-        except Exception:
+            print(f"[topics] 送审 {len(pool)} 篇，AI 挑出 {len(tops)} 条")
+        except Exception as e:
+            print(f"[topics] AI 出错 {type(e).__name__}: {str(e)[:200]}")
             tops = []
 
     secs.sort(key=lambda s: -s[1])
@@ -224,11 +253,11 @@ def render():
     d.text((x, y+8), WD[now.weekday()], font=F(30), fill=0)
     HL = huangli(now.date())
     if "err" not in HL:
-        d.text((x, y+48), HL["nong"], font=F(17), fill=0)
+        d.text((x, y+48), HL["nong"], font=F(20), fill=0)
         rx = W - 26
         for i, txt in enumerate([HL["ganzhi"], f"生肖{HL['sx']}  {HL['nayin']}",
                                  f"距{HL['jq']} {HL['jqd']}天"]):
-            fnt = F(14 if i == 0 else 13)
+            fnt = F(16 if i == 0 else 15)
             d.text((rx - d.textlength(txt, font=fnt), y + 2 + i*20), txt, font=fnt, fill=0)
     y += 88
     d.line([(22,y),(W-22,y)], fill=0, width=2); y += 12
@@ -238,14 +267,14 @@ def render():
         for lab, key, inv in (("宜","yi",True), ("忌","ji",False)):
             bx, by, bs = 24, y, 22
             d.rectangle([bx,by,bx+bs,by+bs], fill=0 if inv else 255, outline=0, width=2)
-            d.text((bx+4, by+1), lab, font=F(15), fill=255 if inv else 0)
+            d.text((bx+4, by+1), lab, font=F(17), fill=255 if inv else 0)
             items = "  ".join(HL[key]) or "诸事不宜"
-            fnt = F(14)
+            fnt = F(16)
             while d.textlength(items, font=fnt) > W-78 and "  " in items:
                 items = items.rsplit("  ", 1)[0]
             d.text((bx+bs+10, by+2), items, font=fnt, fill=0)
             y += 27
-        d.text((24, y), f"冲{HL['chong']}  煞{HL['sha']}  值神{HL['shen']}", font=F(12), fill=0)
+        d.text((24, y), f"冲{HL['chong']}  煞{HL['sha']}  值神{HL['shen']}", font=F(14), fill=0)
         y += 20
         d.line([(22,y),(W-22,y)], fill=0, width=2); y += 12
 
@@ -257,17 +286,17 @@ def render():
         tf = F(56); ts = f"{w['temp']}°"
         d.text((24, y), ts, font=tf, fill=0)
         x = 24 + d.textlength(ts, font=tf) + 12
-        d.text((x, y+6), w["desc"], font=F(22), fill=0)
+        d.text((x, y+6), w["desc"], font=F(26), fill=0)
         d.text((x, y+34), f"体感 {w['feels']}°   湿度 {w['hum']}%   风 {w['wind']}km/h",
-               font=F(13), fill=0)
+               font=F(15), fill=0)
         y += 66
         for i, dd in enumerate(w["days"]):
             bx = 24 + i*((W-48)//3)
-            d.text((bx, y), ["今天","明天","后天"][i], font=F(14), fill=0)
-            d.text((bx, y+20), f"{dd['lo']}~{dd['hi']}°", font=F(17), fill=0)
-            d.text((bx, y+42), dd["desc"], font=F(13), fill=0)
+            d.text((bx, y), ["今天","明天","后天"][i], font=F(16), fill=0)
+            d.text((bx, y+20), f"{dd['lo']}~{dd['hi']}°", font=F(20), fill=0)
+            d.text((bx, y+42), dd["desc"], font=F(15), fill=0)
             if dd["rain"] and int(dd["rain"]) > 20:
-                d.text((bx, y+58), f"降雨 {dd['rain']}%", font=F(12), fill=0)
+                d.text((bx, y+58), f"降雨 {dd['rain']}%", font=F(14), fill=0)
         y += 80
     d.line([(22,y),(W-22,y)], fill=0, width=2); y += 14
 
@@ -276,41 +305,41 @@ def render():
     except Exception: tp = None
     if tp and (tp["counts"]["A"] or tp["counts"]["B"]):
         # 🔴 counts 是 PubMed 原始命中数，不是「可做」。标题和角标都别让他误读成选题数
-        d.text((24, y), "今日选题" if tp["tops"] else "近期新研究", font=F(17), fill=0)
+        d.text((24, y), "今日选题" if tp["tops"] else "近期新研究", font=F(20), fill=0)
         head = f"近{PM_DAYS}天 {tp['counts']['A'] + tp['counts']['B']} 篇新文献"
-        d.text((W - 24 - d.textlength(head, font=F(13)), y + 4), head, font=F(13), fill=0)
+        d.text((W - 24 - d.textlength(head, font=F(15)), y + 4), head, font=F(15), fill=0)
         y += 26
         if tp["tops"]:
-            tf = F(15)
+            tf = F(19)
             for acct, title in tp["tops"]:
-                d.text((30, y), f"{acct}·" + clip(title, W - 96, tf), font=tf, fill=0); y += 22
+                d.text((30, y), f"{acct}·" + clip(title, W - 96, tf), font=tf, fill=0); y += 27
         else:                       # 没配 QWEN_KEY：只报各方向的条数
-            line = " · ".join(f"{n}{c}" for n, c in tp["secs"])
-            d.text((30, y), clip(line, W - 60, F(14)), font=F(14), fill=0); y += 22
+            line = " · ".join(f"{n}{c}" for n, c in tp["secs"][:4])
+            d.text((30, y), clip(line, W - 60, F(16)), font=F(16), fill=0); y += 22
         y += 4
         d.line([(22,y),(W-22,y)], fill=0, width=2); y += 14
 
     # ---- 要闻热点 ----
-    d.text((24, y), "要闻热点", font=F(17), fill=0); y += 26
+    d.text((24, y), "要闻热点", font=F(20), fill=0); y += 26
     news = get_news()
     NEWS_MAX = H - 66
     if not news:
         d.text((30, y), "（热榜获取失败）", font=F(14), fill=0)
     else:
-        nf = F(15)
+        nf = F(19)
         for name, titles in news:
             if y > NEWS_MAX - 40: break
-            d.text((30, y), name, font=F(13), fill=0); y += 19
+            d.text((30, y), name, font=F(15), fill=0); y += 22
             for t in titles:
                 if y > NEWS_MAX: break
-                d.text((34, y), "· " + clip(t, W-90, nf), font=nf, fill=0); y += 21
+                d.text((34, y), "· " + clip(t, W-90, nf), font=nf, fill=0); y += 26
             y += 4
 
     # ---- 页脚 ----
     fy = H - 32
     d.line([(22, fy-12), (W-22, fy-12)], fill=0, width=2)
-    d.text((24, fy), now.strftime("更新 %H:%M"), font=F(14), fill=0)
-    d.text((W-24-d.textlength(CITY_LABEL, font=F(14)), fy), CITY_LABEL, font=F(14), fill=0)
+    d.text((24, fy), now.strftime("更新 %H:%M"), font=F(15), fill=0)
+    d.text((W-24-d.textlength(CITY_LABEL, font=F(15)), fy), CITY_LABEL, font=F(15), fill=0)
 
     return img.convert("1", dither=Image.NONE)
 
