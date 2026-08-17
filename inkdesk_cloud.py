@@ -57,20 +57,24 @@ NEWS_SRC = [("thepaper", "澎湃新闻", 2), ("baidu", "百度热搜", 2), ("tou
 QWEN_KEY    = os.environ.get("QWEN_KEY", "").strip()
 AI_MODEL    = "qwen3.8-max"
 AI_URL      = "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
-TOPIC_CACHE = os.path.join(BASE, "topics.json")   # 由 actions/cache 按日保留
-PM_DAYS     = 7
+TOPIC_CACHE = os.path.join(BASE, "topics.json")   # 直接存进仓库，Kindle 拉它取同一批文章
 N_A, N_B    = 5, 3        # 上屏配额：A 号 5 条、B 号 3 条
+# 🔴 检索式和天数必须和 Kindle 的 newsbook.lua 完全一致 —— 两边要挑同一批文章
 PM_SECTIONS = [
-    ("A", "更年期",   "menopause"),
-    ("A", "激素治疗", '"menopausal hormone therapy" OR "hormone replacement therapy"'),
-    ("A", "骨质疏松", "osteoporosis AND postmenopausal"),
-    ("A", "潮热",     '"vasomotor symptoms"'),
-    ("A", "睡眠",     "menopause AND (sleep OR insomnia)"),
-    ("A", "认知",     '(menopause OR estrogen) AND (cognition OR "cognitive decline")'),
-    ("B", "犬行为",   "dog AND behavior"),
-    ("B", "猫科疾病", "feline AND disease"),
-    ("B", "宠物营养", "(dog OR cat) AND nutrition"),
-    ("B", "人宠关系", '"human-animal bond" OR "pet ownership"'),
+    ("A", 30, "更年期",       "menopause"),
+    ("A", 30, "激素替代疗法", '"menopausal hormone therapy" OR "hormone replacement therapy"'),
+    ("A", 30, "绝经后骨质疏松", "osteoporosis AND postmenopausal"),
+    ("A", 30, "潮热与血管舒缩", '"vasomotor symptoms"'),
+    ("A", 30, "更年期与睡眠", "menopause AND (sleep OR insomnia)"),
+    ("A", 30, "雌激素与认知", '(menopause OR estrogen) AND (cognition OR "cognitive decline")'),
+    ("A", 30, "中年代谢与体重", 'menopause AND (obesity OR "weight gain" OR "metabolic syndrome")'),
+    ("A", 30, "女性肌少症",   "sarcopenia AND women"),
+    ("B", 60, "犬行为",       "dog AND behavior"),
+    ("B", 60, "犬健康",       "canine AND (health OR disease)"),
+    ("B", 60, "猫科疾病",     "feline AND disease"),
+    ("B", 60, "宠物营养",     "(dog OR cat) AND nutrition"),
+    ("B", 60, "人宠关系",     '"human-animal bond" OR "pet ownership"'),
+    ("B", 60, "兽医临床",     '"veterinary medicine" AND (dog OR cat)'),
 ]
 
 def F(s):
@@ -133,10 +137,11 @@ def _pm(path, params):
 
 def _ai_pick(cands):
     """把候选交给千问，按配额挑，返回 [(账号, 中文标题)]"""
-    lines = [f"{i+1}. [{a}] {t}\n{ab[:260]}" for i, (a, t, ab) in enumerate(cands)]
+    lines = [f"{i+1}. [{a}] {t}\n{ab[:260]}" for i, (a, t, ab, _pid) in enumerate(cands)]
     prompt = ("我做两个短视频账号：A【更年期科普】面向 40-55 岁女性；B【宠物】面向养猫狗的人。\n"
               f"下面是最近的文献，挑出最值得做成短视频的：A 号 {N_A} 条、B 号 {N_B} 条。\n"
-              "每条一行，严格用格式（不要别的任何内容）：账号|中文标题\n"
+              "每条一行，严格用格式（不要别的任何内容）：编号|账号|中文标题\n"
+              "- 编号就是上面那条文献前面的数字，必须照抄，不许编\n"
               "- 账号填 A 或 B\n"
               "- 🔴 两个号的条数必须凑满，别把名额都给 A\n"
               "- 中文标题不超过 22 字，说人话，别用学术腔\n"
@@ -151,14 +156,17 @@ def _ai_pick(cands):
     txt = r.json()["choices"][0]["message"]["content"]
     got = {"A": [], "B": []}
     for ln in txt.splitlines():
-        p = ln.strip().split("|", 1)
-        if len(p) == 2 and p[0].strip() in ("A", "B") and p[1].strip():
-            got[p[0].strip()].append(p[1].strip())
+        p = [x.strip() for x in ln.strip().split("|", 2)]
+        if len(p) == 3 and p[0].isdigit() and p[1] in ("A", "B") and p[2]:
+            i = int(p[0]) - 1
+            if 0 <= i < len(cands):          # 编号必须对得上，对不上就丢
+                got[p[1]].append({"t": p[2], "pmid": cands[i][3]})
     # 按配额裁；某个号不够就让另一个号补位，别留空行
     a, b = got["A"][:N_A], got["B"][:N_B]
     a += got["A"][N_A:N_A + (N_B - len(b))]
     b += got["B"][N_B:N_B + (N_A - len(a))]
-    return [("A", t) for t in a] + [("B", t) for t in b]
+    return ([["A", x["t"], x["pmid"]] for x in a]
+          + [["B", x["t"], x["pmid"]] for x in b])
 
 def get_topics():
     """→ {'counts':{'A':n,'B':n}, 'secs':[(名,数)…], 'tops':[(账号,中文标题)…]}"""
@@ -173,9 +181,9 @@ def get_topics():
         pass
 
     counts, secs, cands = {"A": 0, "B": 0}, [], []
-    for acct, name, q in PM_SECTIONS:
+    for acct, days, name, q in PM_SECTIONS:
         try:
-            d = _pm("esearch.fcgi", {"db": "pubmed", "term": q, "reldate": PM_DAYS,
+            d = _pm("esearch.fcgi", {"db": "pubmed", "term": q, "reldate": days,
                     "datetype": "pdat", "retmax": 3, "retmode": "json",
                     "sort": "date"}).json()["esearchresult"]
         except Exception:
@@ -184,7 +192,7 @@ def get_topics():
         counts[acct] += n
         if n: secs.append((name, n))
         for pid in d.get("idlist", [])[:2]:
-            cands.append((acct, name, pid))
+            cands.append([acct, name, pid])
         time.sleep(0.4)                      # NCBI 限 3 次/秒
 
     tops = []
@@ -196,12 +204,14 @@ def get_topics():
             import re as _re
             arts = _re.findall(r"<PubmedArticle>.*?</PubmedArticle>", xml, _re.S)
             pool = []
-            for (acct, name, _), a in zip(cands, arts):
+            for c, a in zip(cands, arts):
+                pid = _re.search(r"<PMID[^>]*>(\d+)</PMID>", a)
                 t  = " ".join(_re.findall(r"<ArticleTitle[^>]*>(.*?)</ArticleTitle>", a, _re.S))
                 ab = " ".join(_re.findall(r"<AbstractText[^>]*>(.*?)</AbstractText>", a, _re.S))
                 t  = _re.sub(r"<[^>]+>", "", t).strip()
                 ab = _re.sub(r"<[^>]+>", "", ab).strip()
-                if t: pool.append((acct, t, ab))
+                if t and ab and pid:
+                    pool.append((c[0], t, ab, pid.group(1)))   # efetch 顺序未必同序，PMID 以正文为准
             if pool: tops = _ai_pick(pool)
             print(f"[topics] 送审 {len(pool)} 篇，AI 挑出 {len(tops)} 条")
         except Exception as e:
@@ -211,7 +221,8 @@ def get_topics():
     secs.sort(key=lambda s: -s[1])
     data = {"date": today, "counts": counts, "secs": secs[:6], "tops": tops}
     try:
-        json.dump(data, open(TOPIC_CACHE, "w", encoding="utf8"), ensure_ascii=False)
+        json.dump(data, open(TOPIC_CACHE, "w", encoding="utf8"),
+                  ensure_ascii=False, indent=1)   # 缩进过：仓库里 diff 看得清
     except Exception:
         pass
     return data
@@ -319,7 +330,7 @@ def render():
         if tp["tops"]:
             tf, sf = F(20), F(16)
             for acct, label in (("A", "A号 · 更年不惑"), ("B", "B号 · 宠物")):
-                rows = [t for a, t in tp["tops"] if a == acct]
+                rows = [t for a, t, _p in tp["tops"] if a == acct]
                 if not rows or y > FOOT_TOP - 50: continue
                 d.text((28, y), label, font=sf, fill=0); y += 24
                 for t in rows:
