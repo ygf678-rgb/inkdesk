@@ -31,6 +31,26 @@ NEWS_UA  = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 
             "(KHTML, like Gecko) Chrome/120.0 Safari/537.36")
 NEWS_SRC = [("thepaper", "澎湃新闻", 4), ("baidu", "百度热搜", 4), ("toutiao", "今日头条", 4)]
 
+# ── 今日选题：自己查 PubMed（Kindle 那套的云端轻量版）──────────────
+# 有 QWEN_KEY 就 AI 预筛 + 中文化；没有就只报条数，绝不把英文长标题塞上屏
+QWEN_KEY    = os.environ.get("QWEN_KEY", "").strip()
+AI_MODEL    = "qwen3.8-max"
+AI_URL      = "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
+TOPIC_CACHE = os.path.join(BASE, "topics.json")   # 由 actions/cache 按日保留
+PM_DAYS     = 7
+PM_SECTIONS = [
+    ("A", "更年期",   "menopause"),
+    ("A", "激素治疗", '"menopausal hormone therapy" OR "hormone replacement therapy"'),
+    ("A", "骨质疏松", "osteoporosis AND postmenopausal"),
+    ("A", "潮热",     '"vasomotor symptoms"'),
+    ("A", "睡眠",     "menopause AND (sleep OR insomnia)"),
+    ("A", "认知",     '(menopause OR estrogen) AND (cognition OR "cognitive decline")'),
+    ("B", "犬行为",   "dog AND behavior"),
+    ("B", "猫科疾病", "feline AND disease"),
+    ("B", "宠物营养", "(dog OR cat) AND nutrition"),
+    ("B", "人宠关系", '"human-animal bond" OR "pet ownership"'),
+]
+
 def F(s):
     try:    return ImageFont.truetype(CJK, s)
     except: return ImageFont.load_default()
@@ -81,6 +101,84 @@ def get_news():
             time.sleep(2)
         if titles: out.append((name, titles))
     return out
+
+def _pm(path, params):
+    r = requests.get(f"https://eutils.ncbi.nlm.nih.gov/entrez/eutils/{path}",
+                     params=params, timeout=25, headers={"User-Agent": NEWS_UA})
+    r.raise_for_status()
+    return r
+
+def _ai_pick(cands):
+    """把候选交给千问：挑 3 条最能做短视频的，返回 [(账号, 中文标题)]"""
+    lines = [f"{i+1}. [{a}] {t}\n{ab[:260]}" for i, (a, t, ab) in enumerate(cands)]
+    prompt = ("我做两个短视频账号：A【更年期科普】面向 40-55 岁女性；B【宠物】面向养猫狗的人。\n"
+              "下面是最近的文献，挑出最值得做成短视频的 3 条。\n"
+              "每条一行，严格用格式（不要别的任何内容）：账号|中文标题\n"
+              "- 账号填 A 或 B\n"
+              "- 中文标题不超过 22 字，说人话，别用学术腔\n"
+              "- 优先挑有生活指导意义的；纯基础研究不要\n\n" + "\n\n".join(lines))
+    r = requests.post(AI_URL, timeout=90,
+        headers={"Authorization": f"Bearer {QWEN_KEY}", "Content-Type": "application/json"},
+        json={"model": AI_MODEL, "max_tokens": 400, "enable_thinking": False,
+              "messages": [{"role": "user", "content": prompt}]})
+    txt = r.json()["choices"][0]["message"]["content"]
+    out = []
+    for ln in txt.splitlines():
+        p = ln.strip().split("|", 1)
+        if len(p) == 2 and p[0].strip() in ("A", "B") and p[1].strip():
+            out.append((p[0].strip(), p[1].strip()))
+    return out[:3]
+
+def get_topics():
+    """→ {'counts':{'A':n,'B':n}, 'secs':[(名,数)…], 'tops':[(账号,中文标题)…]}"""
+    today = now_local().strftime("%Y%m%d")
+    try:
+        c = json.load(open(TOPIC_CACHE, encoding="utf8"))
+        if c.get("date") == today:
+            return c
+    except Exception:
+        pass
+
+    counts, secs, cands = {"A": 0, "B": 0}, [], []
+    for acct, name, q in PM_SECTIONS:
+        try:
+            d = _pm("esearch.fcgi", {"db": "pubmed", "term": q, "reldate": PM_DAYS,
+                    "datetype": "pdat", "retmax": 2, "retmode": "json",
+                    "sort": "date"}).json()["esearchresult"]
+        except Exception:
+            continue
+        n = int(d.get("count", 0))
+        counts[acct] += n
+        if n: secs.append((name, n))
+        for pid in d.get("idlist", [])[:1]:
+            cands.append((acct, name, pid))
+        time.sleep(0.4)                      # NCBI 限 3 次/秒
+
+    tops = []
+    if QWEN_KEY and cands:
+        try:
+            ids = ",".join(c[2] for c in cands)
+            xml = _pm("efetch.fcgi", {"db": "pubmed", "id": ids, "retmode": "xml"}).text
+            import re as _re
+            arts = _re.findall(r"<PubmedArticle>.*?</PubmedArticle>", xml, _re.S)
+            pool = []
+            for (acct, name, _), a in zip(cands, arts):
+                t  = " ".join(_re.findall(r"<ArticleTitle[^>]*>(.*?)</ArticleTitle>", a, _re.S))
+                ab = " ".join(_re.findall(r"<AbstractText[^>]*>(.*?)</AbstractText>", a, _re.S))
+                t  = _re.sub(r"<[^>]+>", "", t).strip()
+                ab = _re.sub(r"<[^>]+>", "", ab).strip()
+                if t: pool.append((acct, t, ab))
+            if pool: tops = _ai_pick(pool)
+        except Exception:
+            tops = []
+
+    secs.sort(key=lambda s: -s[1])
+    data = {"date": today, "counts": counts, "secs": secs[:6], "tops": tops}
+    try:
+        json.dump(data, open(TOPIC_CACHE, "w", encoding="utf8"), ensure_ascii=False)
+    except Exception:
+        pass
+    return data
 
 def huangli(dt):
     try:
@@ -172,6 +270,25 @@ def render():
                 d.text((bx, y+58), f"降雨 {dd['rain']}%", font=F(12), fill=0)
         y += 80
     d.line([(22,y),(W-22,y)], fill=0, width=2); y += 14
+
+    # ---- 今日选题 ----
+    try:    tp = get_topics()
+    except Exception: tp = None
+    if tp and (tp["counts"]["A"] or tp["counts"]["B"]):
+        # 🔴 counts 是 PubMed 原始命中数，不是「可做」。标题和角标都别让他误读成选题数
+        d.text((24, y), "今日选题" if tp["tops"] else "近期新研究", font=F(17), fill=0)
+        head = f"近{PM_DAYS}天 {tp['counts']['A'] + tp['counts']['B']} 篇新文献"
+        d.text((W - 24 - d.textlength(head, font=F(13)), y + 4), head, font=F(13), fill=0)
+        y += 26
+        if tp["tops"]:
+            tf = F(15)
+            for acct, title in tp["tops"]:
+                d.text((30, y), f"{acct}·" + clip(title, W - 96, tf), font=tf, fill=0); y += 22
+        else:                       # 没配 QWEN_KEY：只报各方向的条数
+            line = " · ".join(f"{n}{c}" for n, c in tp["secs"])
+            d.text((30, y), clip(line, W - 60, F(14)), font=F(14), fill=0); y += 22
+        y += 4
+        d.line([(22,y),(W-22,y)], fill=0, width=2); y += 14
 
     # ---- 要闻热点 ----
     d.text((24, y), "要闻热点", font=F(17), fill=0); y += 26
