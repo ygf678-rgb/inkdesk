@@ -55,7 +55,7 @@ NEWS_SRC = [("thepaper", "澎湃新闻", 2), ("baidu", "百度热搜", 2), ("tou
 # ── 今日选题：自己查 PubMed（Kindle 那套的云端轻量版）──────────────
 # 有 QWEN_KEY 就 AI 预筛 + 中文化；没有就只报条数，绝不把英文长标题塞上屏
 QWEN_KEY    = os.environ.get("QWEN_KEY", "").strip()
-AI_MODEL    = "qwen3.8-max"
+AI_MODEL    = "qwen3.7-max"   # 3.7 另有 100 万免费额度 + 限时 5 折，质量对本任务无差别
 AI_URL      = "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
 TOPIC_CACHE = os.path.join(BASE, "topics.json")   # 直接存进仓库，Kindle 拉它取同一批文章
 N_A, N_B    = 5, 3        # 上屏配额：A 号 5 条、B 号 3 条
