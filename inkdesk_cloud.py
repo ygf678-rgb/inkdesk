@@ -53,9 +53,24 @@ NEWS_UA  = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 
 NEWS_SRC = [("thepaper", "澎湃新闻", 2), ("baidu", "百度热搜", 2), ("toutiao", "今日头条", 2)]
 
 # ── 今日选题：自己查 PubMed（Kindle 那套的云端轻量版）──────────────
-# 有 QWEN_KEY 就 AI 预筛 + 中文化；没有就只报条数，绝不把英文长标题塞上屏
-QWEN_KEY    = os.environ.get("QWEN_KEY", "").strip()
-AI_MODEL    = "qwen3.7-max"   # 3.7 另有 100 万免费额度 + 限时 5 折，质量对本任务无差别
+# 有百炼 key 就 AI 预筛 + 中文化；没有就只报条数，绝不把英文长标题塞上屏
+QWEN_KEY    = (os.environ.get("QWEN_KEY") or os.environ.get("DASHSCOPE_API_KEY") or "").strip()
+#            ↑ 变量名沿用 QWEN_KEY 是为了不动 GitHub Secrets 里已有的那个；它其实是百炼通用 key
+AI_MODEL    = "deepseek-v4-pro-0813"
+# 🔴🔴 2026-08-24 从 qwen3.7-max 换过来。原注释「3.7 另有 100 万免费额度」是**错的**：
+#    qwen3.7-max 在百炼「无免费额度模型」名单里，每次调用直接计费。
+#    这个脚本每天跑一次选题，从 8/20 起一直在小额扣费 —— 反复欠费的来源就是它。
+#    (2026-08-22 曾在本机改成 3.8-max，但那次没推上来，线上一直是 3.7。)
+#    现在千问 3.8-max 的免费额度也已用尽转计费，所以直接换 deepseek。
+#
+#    🔴 必须带日期后缀！不带日期的 `deepseek-v4-pro` 同样没有免费额度，
+#       而且「免费额度用完即停」开关对它显示「不支持开启」——永远直接计费。
+#    🔴 不可换 deepseek-v4-flash-0731：实测它会把挑出的结果**重新编号**，
+#       而下面 _ai_pick 是靠编号回查 PMID 的(cands[i][3])，编号错 = 标题配错文章，
+#       上屏看着正常、点进去是另一篇，是静默错误。pro-0813 实测编号全对。
+#
+#    ⚠️ 以后换模型：去百炼「用量&费用 → 免费额度」页搜模型名，看「操作」列，
+#       显示「不支持开启」= 没有免费额度。用 /v1/models 核不出这个。
 AI_URL      = "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
 TOPIC_CACHE = os.path.join(BASE, "topics.json")   # 直接存进仓库，Kindle 拉它取同一批文章
 N_A, N_B    = 5, 3        # 上屏配额：A 号 5 条、B 号 3 条
