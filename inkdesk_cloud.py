@@ -54,9 +54,21 @@ NEWS_SRC = [("thepaper", "澎湃新闻", 2), ("baidu", "百度热搜", 2), ("tou
 
 # ── 今日选题：自己查 PubMed（Kindle 那套的云端轻量版）──────────────
 # 有百炼 key 就 AI 预筛 + 中文化；没有就只报条数，绝不把英文长标题塞上屏
-QWEN_KEY    = (os.environ.get("QWEN_KEY") or os.environ.get("DASHSCOPE_API_KEY") or "").strip()
+# 🔴 2026-08-25 改成 DeepSeek 官网直连优先。同一模型两边明面价一样，但官网明码标出
+#    缓存命中价 0.30/0.15 元（未命中价的 1/30），百炼只写「享有折扣」不给数字。
+#    有 DEEPSEEK_API_KEY 就走官网；没有就回落百炼，所以即使 GitHub Secret 还没加也不会断。
+#    ⚠️ 官网没有 `-0813` 这个名字，只有 `deepseek-v4-pro`（价格结构与百炼 -0813 一致）。
+#    ⚠️ enable_thinking 是百炼特有参数，官网不发。
+_DS_KEY     = (os.environ.get("DEEPSEEK_API_KEY") or "").strip()
+_BL_KEY     = (os.environ.get("QWEN_KEY") or os.environ.get("DASHSCOPE_API_KEY") or "").strip()
 #            ↑ 变量名沿用 QWEN_KEY 是为了不动 GitHub Secrets 里已有的那个；它其实是百炼通用 key
-AI_MODEL    = "deepseek-v4-pro-0813"
+AI_VENDOR   = "官网" if _DS_KEY else "百炼"
+AI_KEY      = _DS_KEY or _BL_KEY
+AI_MODEL    = "deepseek-v4-pro" if _DS_KEY else "deepseek-v4-pro-0813"
+#    🔴 官网 deepseek-v4-pro 是推理模型，不关推理会把 max_tokens 全烧在 reasoning 上，
+#       finish_reason=length 且 content 恒为空（900/4000 都试过，给多少烧多少）。
+#       实测 reasoning_effort:"none" 能关干净；enable_thinking:false 对官网无效。
+AI_EXTRA    = {"reasoning_effort": "none"} if _DS_KEY else {"enable_thinking": False}
 # 🔴🔴 2026-08-24 从 qwen3.7-max 换过来。原注释「3.7 另有 100 万免费额度」是**错的**：
 #    qwen3.7-max 在百炼「无免费额度模型」名单里，每次调用直接计费。
 #    这个脚本每天跑一次选题，从 8/20 起一直在小额扣费 —— 反复欠费的来源就是它。
@@ -71,7 +83,8 @@ AI_MODEL    = "deepseek-v4-pro-0813"
 #
 #    ⚠️ 以后换模型：去百炼「用量&费用 → 免费额度」页搜模型名，看「操作」列，
 #       显示「不支持开启」= 没有免费额度。用 /v1/models 核不出这个。
-AI_URL      = "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
+AI_URL      = ("https://api.deepseek.com/v1/chat/completions" if _DS_KEY
+               else "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions")
 TOPIC_CACHE = os.path.join(BASE, "topics.json")   # 直接存进仓库，Kindle 拉它取同一批文章
 N_A, N_B    = 5, 3        # 上屏配额：A 号 5 条、B 号 3 条
 # 🔴 检索式和天数必须和 Kindle 的 newsbook.lua 完全一致 —— 两边要挑同一批文章
@@ -162,8 +175,8 @@ def _ai_pick(cands):
               "- 中文标题不超过 22 字，说人话，别用学术腔\n"
               "- 优先挑有生活指导意义的；纯基础研究不要\n\n" + "\n\n".join(lines))
     r = requests.post(AI_URL, timeout=120,
-        headers={"Authorization": f"Bearer {QWEN_KEY}", "Content-Type": "application/json"},
-        json={"model": AI_MODEL, "max_tokens": 900, "enable_thinking": False,
+        headers={"Authorization": f"Bearer {AI_KEY}", "Content-Type": "application/json"},
+        json={"model": AI_MODEL, "max_tokens": 900, **AI_EXTRA,
               "messages": [{"role": "user", "content": prompt}]})
     if r.status_code != 200:                      # 日志里能看到原因，不会带出 key
         print(f"[topics] AI HTTP {r.status_code}: {r.text[:200]}")
@@ -172,10 +185,12 @@ def _ai_pick(cands):
     got = {"A": [], "B": []}
     for ln in txt.splitlines():
         p = [x.strip() for x in ln.strip().split("|", 2)]
-        if len(p) == 3 and p[0].isdigit() and p[1] in ("A", "B") and p[2]:
+        # 账号列容错：实测模型可能写成 "[A]" 而不是 "A"，不剥掉会整批丢弃
+        acct = p[1].strip(" []【】()（）").upper() if len(p) == 3 else ""
+        if len(p) == 3 and p[0].isdigit() and acct in ("A", "B") and p[2]:
             i = int(p[0]) - 1
             if 0 <= i < len(cands):          # 编号必须对得上，对不上就丢
-                got[p[1]].append({"t": p[2], "pmid": cands[i][3]})
+                got[acct].append({"t": p[2], "pmid": cands[i][3]})
     # 按配额裁；某个号不够就让另一个号补位，别留空行
     a, b = got["A"][:N_A], got["B"][:N_B]
     a += got["A"][N_A:N_A + (N_B - len(b))]
@@ -190,7 +205,7 @@ def get_topics():
         c = json.load(open(TOPIC_CACHE, encoding="utf8"))
         # 🔴 缓存里没有 tops 而现在又有 key，说明上次是没 key 时算的 —— 必须重算。
         #    否则当天第一次跑碰上缺 key，一整天都会返回那份空结果
-        if c.get("date") == today and (c.get("tops") or not QWEN_KEY):
+        if c.get("date") == today and (c.get("tops") or not AI_KEY):
             return c
     except Exception:
         pass
@@ -211,8 +226,8 @@ def get_topics():
         time.sleep(0.4)                      # NCBI 限 3 次/秒
 
     tops = []
-    print(f"[topics] QWEN_KEY={'已配置' if QWEN_KEY else '缺失'} 候选={len(cands)} 命中={counts}")
-    if QWEN_KEY and cands:
+    print(f"[topics] AI={AI_VENDOR if AI_KEY else '缺失'}/{AI_MODEL} 候选={len(cands)} 命中={counts}")
+    if AI_KEY and cands:
         try:
             ids = ",".join(c[2] for c in cands)
             xml = _pm("efetch.fcgi", {"db": "pubmed", "id": ids, "retmode": "xml"}).text

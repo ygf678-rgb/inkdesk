@@ -46,6 +46,8 @@ jobs:
         env:
           DEVICE_ID: ${{ secrets.DEVICE_ID }}
           QWEN_KEY: ${{ secrets.QWEN_KEY }}
+          # 2026-08-25 加：有这个就走 DeepSeek 官网（缓存价便宜 30 倍），没有则回落百炼
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
         run: python inkdesk_cloud.py --push
 
       - name: Commit topics.json
