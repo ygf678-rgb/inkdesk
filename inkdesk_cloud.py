@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """
-inkdesk (云端版) — 日期 / 老黄历 / 天气 / 今日选题，推到阅星瞳 X3。
+inkdesk (云端版) — 日期 / 老黄历 / 天气 / 每日新闻，推到阅星瞳 X3。
 跑在 GitHub Actions 上，不依赖本机。
-待办已移除（本机数据云端读不到）；要闻已移除（2026-08-17 他要求整块换成选题）。
+待办已移除（本机数据云端读不到）。
+2026-09-26 他要求屏上的「今日选题」改回每日新闻（恢复 8/15 版的新闻块）；
+topics.json 照常每天算一次，给 Kindle 日报的「今日精选」用，只是不再画到屏上。
 """
 import json, os, sys, time, io, datetime
 from PIL import Image, ImageDraw, ImageFont
@@ -50,7 +52,7 @@ def zh_desc(code, en):
 NEWS_API = "https://newsnow.busiyi.world/api/s"
 NEWS_UA  = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
             "(KHTML, like Gecko) Chrome/120.0 Safari/537.36")
-NEWS_SRC = [("thepaper", "澎湃新闻", 2), ("baidu", "百度热搜", 2), ("toutiao", "今日头条", 2)]
+NEWS_SRC = [("thepaper", "澎湃新闻", 4), ("baidu", "百度热搜", 4), ("toutiao", "今日头条", 4)]
 
 # ── 今日选题：自己查 PubMed（Kindle 那套的云端轻量版）──────────────
 # 有百炼 key 就 AI 预筛 + 中文化；没有就只报条数，绝不把英文长标题塞上屏
@@ -348,28 +350,21 @@ def render():
         y += 80
     d.line([(22,y),(W-22,y)], fill=0, width=2); y += 14
 
-    # ---- 今日选题（要闻已按他要求整块去掉，全给选题）----
-    try:    tp = get_topics()
-    except Exception: tp = None
-    if tp and (tp["counts"]["A"] or tp["counts"]["B"]):
-        d.text((24, y), "今日选题" if tp["tops"] else "近期新研究", font=F(21), fill=0)
-        head = f"A 近30天 {tp['counts']['A']} · B 近60天 {tp['counts']['B']}"
-        d.text((W - 24 - d.textlength(head, font=F(15)), y + 6), head, font=F(15), fill=0)
-        y += 30
-        FOOT_TOP = H - 56
-        if tp["tops"]:
-            tf, sf = F(20), F(16)
-            for acct, label in (("A", "A号 · 更年不惑"), ("B", "B号 · 宠物")):
-                rows = [t for a, t, _p in tp["tops"] if a == acct]
-                if not rows or y > FOOT_TOP - 50: continue
-                d.text((28, y), label, font=sf, fill=0); y += 24
-                for t in rows:
-                    if y > FOOT_TOP - 26: break
-                    d.text((32, y), "· " + clip(t, W - 74, tf), font=tf, fill=0); y += 28
-                y += 6
-        else:
-            line = " · ".join(f"{n}{c}" for n, c in tp["secs"][:4])
-            d.text((30, y), clip(line, W - 60, F(16)), font=F(16), fill=0); y += 24
+    # ---- 每日新闻（2026-09-26 他要求把选题改回来，恢复 8/15 版）----
+    d.text((24, y), "每日新闻", font=F(17), fill=0); y += 26
+    news = get_news()
+    NEWS_MAX = H - 66
+    if not news:
+        d.text((30, y), "（热榜获取失败）", font=F(14), fill=0)
+    else:
+        nf = F(15)
+        for name, titles in news:
+            if y > NEWS_MAX - 40: break
+            d.text((30, y), name, font=F(13), fill=0); y += 19
+            for t in titles:
+                if y > NEWS_MAX: break
+                d.text((34, y), "· " + clip(t, W-90, nf), font=nf, fill=0); y += 21
+            y += 4
 
     # ---- 页脚 ----
     fy = H - 32
@@ -397,6 +392,11 @@ def notify():
     return i.is_published()
 
 if __name__ == "__main__":
+    # 选题不上屏了，但 topics.json 还要每天出一份给 Kindle 的「今日精选」（当天有缓存就不调 AI）
+    try:
+        tp = get_topics(); print(f"[topics] tops={len(tp.get('tops') or [])}")
+    except Exception as e:
+        print(f"[topics] 出错 {type(e).__name__}: {str(e)[:200]}")
     img = render()
     img.save("inkdesk.bmp"); img.convert("L").save("inkdesk.png")
     print(f"生成 {img.size}")
