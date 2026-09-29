@@ -11,10 +11,14 @@ HOST = 'https://airpage.yunhug.com'
 MQTT_HOST, MQTT_PORT = 'mqtt-cn.uipcat.com', 1883
 WD = ['周一', '周二', '周三', '周四', '周五', '周六', '周日']
 
+def card_day(now):
+    """卡是给哪天早上看的：晚上 18 点以后推的算第二天（workflow 21 点起就推晨卡）"""
+    return (now + datetime.timedelta(days=1)).date() if now.hour >= 18 else now.date()
+
 def stamp(img):
-    now = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=8)))
+    day = card_day(datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=8))))
     img = img.convert('L'); d = ImageDraw.Draw(img)
-    head = f'今日英语 · {now.month} 月 {now.day} 日 {WD[now.weekday()]}'
+    head = f'今日英语 · {day.month} 月 {day.day} 日 {WD[day.weekday()]}'
     f = ImageFont.truetype(os.path.join(BASE, 'fonts', 'cjk.ttf'), 19)
     w = d.textlength(head, font=f)
     d.rectangle([(img.width - w) / 2 - 12, 4, (img.width + w) / 2 + 12, 32], fill=255)

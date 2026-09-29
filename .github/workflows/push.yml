@@ -59,8 +59,11 @@ jobs:
         run: |
           H=$(TZ=Asia/Shanghai date +%-H)
           MODE="${{ github.event.inputs.mode || 'auto' }}"
-          if [ "$MODE" = "english" ] || { [ "$MODE" = "auto" ] && [ "$H" -ge 5 ] && [ "$H" -lt 11 ] && [ -f english/card.bmp ]; }; then
-            python inkdesk_cloud.py            # 早上照常算 topics（给 Kindle），但不推新闻屏
+          # 晚上 21 点到第二天 11 点显示英语晨卡（日期写第二天），其余时间新闻。
+          # 2026-09-29 改：GitHub 定时任务常晚跑一两个小时（9/29 早上第一次推到 8:49），只靠 5–7 点那几次保证不了 7 点前上屏；
+          # 头天晚上最后一次推送就把卡放上去，早上跑不跑都不影响
+          if [ "$MODE" = "english" ] || { [ "$MODE" = "auto" ] && { [ "$H" -ge 21 ] || [ "$H" -lt 11 ]; } && [ -f english/card.bmp ]; }; then
+            python inkdesk_cloud.py            # 照常算 topics（给 Kindle），但不推新闻屏
             python english_card.py --push      # 推英语晨卡
           else
             python inkdesk_cloud.py --push
