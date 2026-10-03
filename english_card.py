@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """英语晨卡推送：把 english/card.bmp（Mac 上按学习进度提前画好）盖上当天日期，推到 X3。
-早上 5–11 点由 push.yml 调用（这段时间不推新闻屏）；手动测试：gh workflow run push.yml -f mode=english
+北京时间 21 点至次日 11 点由 push.yml 调用（这段时间不推新闻屏）；手动测试：gh workflow run push.yml -f mode=english
 卡的内容由 ~/inkclaude/english/morning_card.py 生成并提交，这里只负责「盖日期 + 上传 + 发刷新」。2026-09-26 建。
 """
 import io, os, sys, json, time, datetime, requests

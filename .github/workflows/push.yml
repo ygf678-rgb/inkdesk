@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: "auto=按时间（北京 5–11 点推英语晨卡，其余推新闻屏）/ english / news"
+        description: "auto=按时间（北京 21 点至次日 11 点推英语晨卡，其余推新闻屏）/ english / news"
         default: auto
 
 concurrency:
